@@ -7,7 +7,6 @@ export default function TompeiCraft() {
   const containerRef = useRef<HTMLDivElement>(null);
   const [isMounted, setIsMounted] = useState(false);
 
-  // ゲームの内部状態を保持するref
   const state = useRef({
     camera: null as THREE.PerspectiveCamera | null,
     scene: null as THREE.Scene | null,
@@ -24,49 +23,51 @@ export default function TompeiCraft() {
     setIsMounted(true);
     if (!containerRef.current) return;
 
-    // --- 1. シーンとレンダラーの初期化 ---
+    // --- 1. シーン・カメラ・レンダラー ---
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x87ceeb); // 空色
+    scene.background = new THREE.Color(0x87ceeb); // 青空
     state.current.scene = scene;
 
-    const camera = new THREE.PerspectiveCamera(
-      75, 
-      window.innerWidth / window.innerHeight, 
-      0.1, 
-      1000
-    );
-    camera.position.set(0, 2, 5); // 少し高い位置から
+    // 画面サイズを取得
+    const width = window.innerWidth;
+    const height = window.innerHeight;
+
+    const camera = new THREE.PerspectiveCamera(75, width / height, 0.1, 1000);
+    camera.position.set(0, 5, 10); // 少し引いた位置に
+    camera.lookAt(0, 0, 0);
     state.current.camera = camera;
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     renderer.setPixelRatio(window.devicePixelRatio);
-    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setSize(width, height);
+    // 直接スタイルを固定
+    renderer.domElement.style.position = 'absolute';
+    renderer.domElement.style.top = '0';
+    renderer.domElement.style.left = '0';
+    renderer.domElement.style.zIndex = '0'; 
+    
     containerRef.current.appendChild(renderer.domElement);
     state.current.renderer = renderer;
 
-    // --- 2. 地面（トンペイクラフツの第一歩） ---
-    // 100x100のグリッド
-    const gridHelper = new THREE.GridHelper(100, 100, 0x000000, 0x444444);
-    scene.add(gridHelper);
+    // --- 2. 目に見えるオブジェクトを配置 ---
+    // 地面
+    const grid = new THREE.GridHelper(200, 50, 0xffffff, 0x555555);
+    scene.add(grid);
 
-    // 簡易的な緑の地面
-    const groundGeo = new THREE.PlaneGeometry(100, 100);
-    const groundMat = new THREE.MeshLambertMaterial({ color: 0x2e8b57 });
-    const ground = new THREE.Mesh(groundGeo, groundMat);
-    ground.rotation.x = -Math.PI / 2;
-    scene.add(ground);
+    // 中央に目印の赤いブロック
+    const boxGeo = new THREE.BoxGeometry(2, 2, 2);
+    const boxMat = new THREE.MeshLambertMaterial({ color: 0xff0000 });
+    const box = new THREE.Mesh(boxGeo, boxMat);
+    box.position.y = 1;
+    scene.add(box);
 
-    // 光源
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
-    scene.add(ambientLight);
-    const sunLight = new THREE.DirectionalLight(0xffffff, 0.8);
-    sunLight.position.set(5, 10, 7);
-    scene.add(sunLight);
+    // ライト
+    const ambient = new THREE.AmbientLight(0xffffff, 1.0);
+    scene.add(ambient);
 
-    // --- 3. スマホ視点操作ロジック ---
-    const handleTouchStart = (e: TouchEvent) => {
+    // --- 3. 操作ロジック（右画面視点移動） ---
+    const onTouchStart = (e: TouchEvent) => {
       const touch = e.touches[0];
-      // 画面右半分で視点操作開始
       if (touch.clientX > window.innerWidth / 2) {
         state.current.touchId = touch.identifier;
         state.current.touchStartX = touch.clientX;
@@ -74,106 +75,89 @@ export default function TompeiCraft() {
       }
     };
 
-    const handleTouchMove = (e: TouchEvent) => {
+    const onTouchMove = (e: TouchEvent) => {
+      if (e.cancelable) e.preventDefault();
       for (let i = 0; i < e.changedTouches.length; i++) {
-        const touch = e.changedTouches[i];
-        if (touch.identifier === state.current.touchId) {
-          const dx = touch.clientX - state.current.touchStartX;
-          const dy = touch.clientY - state.current.touchStartY;
-
-          // 視点感度設定
-          state.current.yaw -= dx * 0.005;
-          state.current.pitch -= dy * 0.005;
-          // 真上・真下を向きすぎないように制限
-          state.current.pitch = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, state.current.pitch));
-
-          state.current.touchStartX = touch.clientX;
-          state.current.touchStartY = touch.clientY;
+        const t = e.changedTouches[i];
+        if (t.identifier === state.current.touchId) {
+          const dx = t.clientX - state.current.touchStartX;
+          const dy = t.clientY - state.current.touchStartY;
+          state.current.yaw -= dx * 0.007;
+          state.current.pitch -= dy * 0.007;
+          state.current.pitch = Math.max(-1.5, Math.min(1.5, state.current.pitch));
+          state.current.touchStartX = t.clientX;
+          state.current.touchStartY = t.clientY;
         }
       }
     };
 
-    const handleTouchEnd = (e: TouchEvent) => {
-      for (let i = 0; i < e.changedTouches.length; i++) {
-        if (e.changedTouches[i].identifier === state.current.touchId) {
-          state.current.touchId = null;
-        }
-      }
-    };
+    const onTouchEnd = () => { state.current.touchId = null; };
 
-    window.addEventListener('touchstart', handleTouchStart, { passive: false });
-    window.addEventListener('touchmove', handleTouchMove, { passive: false });
-    window.addEventListener('touchend', handleTouchEnd);
+    window.addEventListener('touchstart', onTouchStart, { passive: false });
+    window.addEventListener('touchmove', onTouchMove, { passive: false });
+    window.addEventListener('touchend', onTouchEnd);
 
-    // --- 4. アニメーションループ ---
-    let animationId: number;
+    // --- 4. ループ ---
+    let animId: number;
     const animate = () => {
-      animationId = requestAnimationFrame(animate);
-
+      animId = requestAnimationFrame(animate);
       if (state.current.camera) {
-        // 回転の適用
         state.current.camera.rotation.order = 'YXZ';
         state.current.camera.rotation.y = state.current.yaw;
         state.current.camera.rotation.x = state.current.pitch;
 
-        // 移動の計算
-        if (state.current.moveForward !== 0) {
-          const dir = new THREE.Vector3(0, 0, -1);
-          dir.applyQuaternion(state.current.camera.quaternion);
-          dir.y = 0; // 地面と平行に移動
-          dir.normalize();
-          state.current.camera.position.addScaledVector(dir, 0.1);
+        if (state.current.moveForward) {
+          const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(state.current.camera.quaternion);
+          dir.y = 0;
+          state.current.camera.position.addScaledVector(dir.normalize(), 0.2);
         }
       }
-
       renderer.render(scene, camera);
     };
     animate();
 
-    // クリーンアップ
     return () => {
-      cancelAnimationFrame(animationId);
-      window.removeEventListener('touchstart', handleTouchStart);
-      window.removeEventListener('touchmove', handleTouchMove);
-      window.removeEventListener('touchend', handleTouchEnd);
-      if (containerRef.current) {
-        containerRef.current.removeChild(renderer.domElement);
-      }
+      cancelAnimationFrame(animId);
+      window.removeEventListener('touchstart', onTouchStart);
+      window.removeEventListener('touchmove', onTouchMove);
+      window.removeEventListener('touchend', onTouchEnd);
+      if (containerRef.current) containerRef.current.innerHTML = '';
     };
   }, []);
 
   if (!isMounted) return null;
 
   return (
-    <main className="fixed inset-0 bg-black overflow-hidden select-none touch-none">
-      {/* 3D描画用コンテナ */}
-      <div ref={containerRef} className="absolute inset-0 w-full h-full" />
+    <div style={{ position: 'fixed', inset: 0, backgroundColor: '#000', overflow: 'hidden' }}>
+      {/* 3D レンダラー用コンテナ */}
+      <div ref={containerRef} style={{ position: 'absolute', inset: 0, zIndex: 0 }} />
 
-      {/* 画面中央の照準 */}
-      <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none">
-        <div className="text-white text-3xl font-light opacity-60">+</div>
-      </div>
+      {/* UIレイヤー: zIndexを上げて手前に出す */}
+      <div style={{ position: 'absolute', inset: 0, zIndex: 10, pointerEvents: 'none', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', padding: '20px' }}>
+        
+        <div style={{ color: 'white', backgroundColor: 'rgba(0,0,0,0.5)', alignSelf: 'flex-start', padding: '5px 10px', borderRadius: '5px', fontSize: '14px' }}>
+          TompeiCraft v0.1
+        </div>
 
-      {/* 操作パネル */}
-      <div className="absolute inset-0 flex pointer-events-none">
-        {/* 左側：移動ボタン（長押しで前進） */}
-        <div className="w-1/2 h-full flex items-end justify-start p-10">
+        <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', color: 'white', fontSize: '24px', opacity: 0.5 }}>
+          +
+        </div>
+
+        <div style={{ display: 'flex', justifyContent: 'flex-start', alignItems: 'flex-end', height: '150px' }}>
           <div 
-            className="w-24 h-24 rounded-full bg-white/20 border-2 border-white/40 flex items-center justify-center pointer-events-auto active:bg-white/40"
+            style={{ 
+              width: '80px', height: '80px', borderRadius: '50%', 
+              backgroundColor: 'rgba(255,255,255,0.3)', border: '2px solid white',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              color: 'white', fontWeight: 'bold', pointerEvents: 'auto'
+            }}
             onTouchStart={() => { state.current.moveForward = 1; }}
             onTouchEnd={() => { state.current.moveForward = 0; }}
           >
-            <span className="text-white text-xs font-bold">MOVE</span>
+            MOVE
           </div>
         </div>
-        
-        {/* 右側：視点・アクションエリア（透明な受け口） */}
-        <div className="w-1/2 h-full relative pointer-events-none">
-           <div className="absolute top-4 right-4 text-white bg-black/50 px-3 py-1 rounded text-sm font-mono">
-             TompeiCraft v0.1
-           </div>
-        </div>
       </div>
-    </main>
+    </div>
   );
 }
