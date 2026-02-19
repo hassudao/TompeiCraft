@@ -1,173 +1,304 @@
 "use client";
 
-import React, { useState, useEffect, useCallback, useRef } from "react";
-import { Canvas } from "@react-three/fiber";
-import { Sky, PointerLockControls, Stars, PerspectiveCamera } from "@react-three/drei";
-import { Physics, useBox, useSphere } from "@react-three/cannon";
-import * as THREE from "three";
+import React, { useEffect, useRef, useState } from 'react';
 
-// --- Types ---
-type BlockType = "grass" | "dirt" | "stone" | "glass" | "wood";
+// ブロックの定義（テクスチャURLを追加）
+const BLOCK_TYPES = [
+  { 
+    id: 'wood', 
+    color: 0x8b4513, 
+    label: '木', 
+    texture: 'https://threejs.org/examples/textures/planets/earth_atmos_2048.jpg' // サンプルテクスチャ
+  },
+  { 
+    id: 'stone', 
+    color: 0x808080, 
+    label: '石', 
+    texture: 'https://threejs.org/examples/textures/terrain/grasslight-big.jpg' 
+  },
+  { 
+    id: 'grass', 
+    color: 0x7cfc00, 
+    label: '草', 
+    texture: 'https://threejs.org/examples/textures/floors/FloorsCheckerboard_S_Diffuse.jpg'
+  },
+];
 
-interface BlockProps {
-  position: [number, number, number];
-  type: BlockType;
-}
+export default function TompeiCraft() {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [isMounted, setIsMounted] = useState(false);
+  const [selectedBlockIdx, setSelectedBlockIdx] = useState(0);
 
-// --- Texture/Material Helper ---
-// フリーのテクスチャ（OpenGameArtなど）を想定したマテリアル設定
-// 今回は即時利用可能なように、標準マテリアルに粗さや凹凸感を加えた設定にしています
-const getMaterial = (type: BlockType) => {
-  const loader = new THREE.TextureLoader();
-  
-  // 参考: フリー素材URL（必要に応じて差し替え可能）
-  // 例: "https://raw.githubusercontent.com/mrdoob/three.js/master/examples/textures/planets/earth_atmos_2048.jpg"
-  
-  switch (type) {
-    case "grass": return <meshStandardMaterial color="#5d994d" roughness={0.8} metalness={0.1} />;
-    case "dirt": return <meshStandardMaterial color="#73533a" roughness={1} />;
-    case "stone": return <meshStandardMaterial color="#808080" roughness={0.9} metalness={0.2} />;
-    case "glass": return <meshStandardMaterial color="#a0d8ef" transparent opacity={0.6} roughness={0.1} />;
-    case "wood": return <meshStandardMaterial color="#7a5230" roughness={0.7} />;
-    default: return <meshStandardMaterial color="white" />;
-  }
-};
+  const state = useRef({
+    moveX: 0, moveZ: 0, yaw: 0, pitch: 0,
+    camera: null as any, scene: null as any, renderer: null as any, raycaster: null as any,
+    ground: null as any, highlightBox: null as any,
+    velocity: 0, isGrounded: true,
+    rightTouchId: null as number | null,
+    touchStartX: 0, touchStartY: 0,
+    touchStartTime: 0, hasMoved: false,
+    selectedColor: BLOCK_TYPES[0].color,
+    textures: [] as any[],
+  });
 
-// --- Components ---
+  // 選択中の色（およびテクスチャ）を更新
+  useEffect(() => {
+    state.current.selectedColor = BLOCK_TYPES[selectedBlockIdx].color;
+  }, [selectedBlockIdx]);
 
-// 個別のブロック
-const Block = ({ position, type }: BlockProps) => {
-  const [ref] = useBox(() => ({
-    type: "Static",
-    position,
-  }));
-
-  return (
-    <mesh ref={ref as any} castShadow receiveShadow>
-      <boxGeometry args={[1, 1, 1]} />
-      {getMaterial(type)}
-    </mesh>
-  );
-};
-
-// 床
-const Ground = () => {
-  const [ref] = useBox(() => ({
-    rotation: [-Math.PI / 2, 0, 0],
-    position: [0, -0.5, 0],
-    args: [100, 100, 1],
-  }));
-
-  return (
-    <mesh ref={ref as any} receiveShadow>
-      <planeGeometry args={[100, 100]} />
-      <meshStandardMaterial color="#404040" roughness={0.8} />
-    </mesh>
-  );
-};
-
-// プレイヤー/カメラ制御
-const Player = () => {
-  const [ref, api] = useSphere(() => ({
-    mass: 1,
-    type: "Dynamic",
-    position: [0, 2, 0],
-    fixedRotation: true,
-  }));
-
-  const velocity = useRef([0, 0, 0]);
-  useEffect(() => api.velocity.subscribe((v) => (velocity.current = v)), [api.velocity]);
-
-  const pos = useRef([0, 0, 0]);
-  useEffect(() => api.position.subscribe((p) => (pos.current = p)), [api.position]);
-
-  return (
-    <>
-      <PerspectiveCamera makeDefault position={pos.current} />
-      <PointerLockControls />
-      {/* 簡易的な移動ロジックは省略（必要に応じて以前の移動コードを統合可能） */}
-    </>
-  );
-};
-
-// --- Main Page Component ---
-export default function GammaPage() {
-  const [blocks, setBlocks] = useState<BlockProps[]>([
-    { position: [2, 0, 2], type: "grass" },
-    { position: [2, 1, 2], type: "stone" },
-    { position: [3, 0, 2], type: "wood" },
-  ]);
-
-  const [selectedBlock, setSelectedBlock] = useState<BlockType>("grass");
-
-  // 全画面表示の修正 (Pointer Lock APIの呼び出し)
-  const handleCanvasClick = useCallback(() => {
-    const element = document.documentElement;
+  // 全画面表示の切り替え関数
+  const toggleFullscreen = () => {
     if (!document.fullscreenElement) {
-      element.requestFullscreen().catch((err) => {
+      document.documentElement.requestFullscreen().catch(err => {
         console.error(`Error attempting to enable full-screen mode: ${err.message}`);
       });
+    } else {
+      document.exitFullscreen();
     }
-  }, []);
+  };
+
+  useEffect(() => {
+    setIsMounted(true);
+    const script = document.createElement('script');
+    script.src = "https://cdnjs.cloudflare.com/ajax/libs/three.js/0.160.0/three.min.js";
+    script.onload = () => {
+      if (!containerRef.current) return;
+      const THREE = (window as any).THREE;
+
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x87ceeb);
+      state.current.scene = scene;
+
+      const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+      camera.position.set(0, 2, 5);
+      state.current.camera = camera;
+
+      const renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setPixelRatio(window.devicePixelRatio);
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      containerRef.current.appendChild(renderer.domElement);
+      state.current.renderer = renderer;
+
+      state.current.raycaster = new THREE.Raycaster();
+
+      // テクスチャのロード
+      const loader = new THREE.TextureLoader();
+      state.current.textures = BLOCK_TYPES.map(b => loader.load(b.texture));
+
+      // ハイライト
+      const hBox = new THREE.Mesh(
+        new THREE.BoxGeometry(1.02, 1.02, 1.02),
+        new THREE.MeshBasicMaterial({ color: 0xffffff, wireframe: true, transparent: true, opacity: 0.4 })
+      );
+      hBox.visible = false;
+      scene.add(hBox);
+      state.current.highlightBox = hBox;
+
+      // ライト
+      scene.add(new THREE.AmbientLight(0xaaaaaa));
+      const sun = new THREE.DirectionalLight(0xffffff, 0.7);
+      sun.position.set(10, 20, 10);
+      scene.add(sun);
+
+      // 地面
+      const groundGeo = new THREE.PlaneGeometry(200, 200);
+      const groundMat = new THREE.MeshLambertMaterial({ color: 0x3a7d3a });
+      const ground = new THREE.Mesh(groundGeo, groundMat);
+      ground.rotation.x = -Math.PI / 2;
+      scene.add(ground);
+      state.current.ground = ground;
+
+      const performAction = (isDelete: boolean) => {
+        const { raycaster, camera, scene, ground } = state.current;
+        raycaster.setFromCamera({ x: 0, y: 0 }, camera);
+        const intersects = raycaster.intersectObjects(scene.children.filter((o:any) => o !== state.current.highlightBox));
+
+        if (intersects.length > 0) {
+          const target = intersects[0];
+          if (isDelete) {
+            if (target.object !== ground) {
+              scene.remove(target.object);
+              if (navigator.vibrate) navigator.vibrate(40);
+            }
+          } else {
+            // 現在選択中のテクスチャを取得
+            const texture = state.current.textures[selectedBlockIdx];
+            const box = new THREE.Mesh(
+              new THREE.BoxGeometry(1, 1, 1), 
+              new THREE.MeshLambertMaterial({ map: texture, color: 0xffffff }) // テクスチャを適用
+            );
+            box.position.copy(target.point).add(target.face.normal.multiplyScalar(0.5));
+            box.position.set(Math.round(box.position.x), Math.round(box.position.y), Math.round(box.position.z));
+            scene.add(box);
+            if (navigator.vibrate) navigator.vibrate(15);
+          }
+        }
+      };
+
+      const handleTouch = (e: TouchEvent) => {
+        const t = e.changedTouches[0];
+        // 右半分または上部エリアでのカメラ操作
+        if (t.clientX > window.innerWidth / 2 || t.clientY < window.innerHeight - 150) {
+          if (e.type === 'touchstart') {
+            state.current.rightTouchId = t.identifier;
+            state.current.touchStartX = t.clientX;
+            state.current.touchStartY = t.clientY;
+            state.current.touchStartTime = Date.now();
+            state.current.hasMoved = false;
+          } else if (e.type === 'touchmove' && t.identifier === state.current.rightTouchId) {
+            const dx = t.clientX - state.current.touchStartX;
+            const dy = t.clientY - state.current.touchStartY;
+            if (Math.abs(dx) > 5 || Math.abs(dy) > 5) state.current.hasMoved = true;
+            state.current.yaw -= dx * 0.005;
+            state.current.pitch -= dy * 0.005;
+            state.current.pitch = Math.max(-1.5, Math.min(1.5, state.current.pitch));
+            state.current.touchStartX = t.clientX;
+            state.current.touchStartY = t.clientY;
+          } else if (e.type === 'touchend' && t.identifier === state.current.rightTouchId) {
+            if (!state.current.hasMoved && (Date.now() - state.current.touchStartTime < 1000)) {
+              performAction(Date.now() - state.current.touchStartTime > 400);
+            }
+            state.current.rightTouchId = null;
+          }
+        }
+      };
+
+      window.addEventListener('touchstart', handleTouch);
+      window.addEventListener('touchmove', handleTouch, { passive: false });
+      window.addEventListener('touchend', handleTouch);
+
+      const animate = () => {
+        requestAnimationFrame(animate);
+        const s = state.current;
+        if (s.camera) {
+          s.camera.rotation.order = 'YXZ';
+          s.camera.rotation.y = s.yaw;
+          s.camera.rotation.x = s.pitch;
+
+          s.raycaster.setFromCamera({ x: 0, y: 0 }, s.camera);
+          const intersects = s.raycaster.intersectObjects(s.scene.children.filter((o:any) => o !== s.highlightBox));
+          if (intersects.length > 0 && intersects[0].object !== s.ground) {
+             s.highlightBox.position.copy(intersects[0].object.position);
+             s.highlightBox.visible = true;
+          } else { 
+            s.highlightBox.visible = false; 
+          }
+
+          if (s.moveX !== 0 || s.moveZ !== 0) {
+            const dir = new THREE.Vector3(s.moveX, 0, s.moveZ).applyQuaternion(s.camera.quaternion);
+            dir.y = 0;
+            s.camera.position.addScaledVector(dir.normalize(), 0.15);
+          }
+          s.velocity -= 0.015;
+          s.camera.position.y += s.velocity;
+          if (s.camera.position.y <= 2) { 
+            s.camera.position.y = 2; 
+            s.velocity = 0; 
+            s.isGrounded = true;
+          } else { 
+            s.isGrounded = false;
+          }
+        }
+        renderer.render(scene, camera);
+      };
+      animate();
+
+      const handleResize = () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+      };
+      window.addEventListener('resize', handleResize);
+
+      return () => {
+        window.removeEventListener('resize', handleResize);
+        window.removeEventListener('touchstart', handleTouch);
+        window.removeEventListener('touchmove', handleTouch);
+        window.removeEventListener('touchend', handleTouch);
+      };
+    };
+    document.head.appendChild(script);
+  }, [selectedBlockIdx]); // selectedBlockIdxが変わった時に再設定が必要な箇所があるため
+
+  if (!isMounted) return null;
 
   return (
-    <div className="relative w-full h-screen bg-black" onClick={handleCanvasClick}>
-      {/* 3D World */}
-      <Canvas shadows>
-        <Sky sunPosition={[100, 100, 20]} />
-        <Stars radius={100} depth={50} count={5000} factor={4} saturation={0} fade speed={1} />
-        <ambientLight intensity={0.5} />
-        <pointLight position={[10, 10, 10]} castShadow intensity={1} />
+    <div style={{ position: 'fixed', inset: 0, backgroundColor: '#000', overflow: 'hidden', touchAction: 'none' }}>
+      <div ref={containerRef} style={{ position: 'absolute', inset: 0 }} />
+
+      {/* UI層 */}
+      <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', display: 'flex', flexDirection: 'column' }}>
         
-        <Physics gravity={[0, -9.81, 0]}>
-          <Player />
-          <Ground />
-          {blocks.map((block, index) => (
-            <Block key={index} {...block} />
-          ))}
-        </Physics>
-      </Canvas>
-
-      {/* UI: 十字レティクル */}
-      <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none">
-        <div className="w-4 h-4 border-2 border-white rounded-full opacity-50" />
-      </div>
-
-      {/* UI: ホットバー (位置をさらに下へ調整) */}
-      <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex gap-2 p-2 bg-black/60 backdrop-blur-md rounded-xl border border-white/20 shadow-2xl">
-        {(["grass", "dirt", "stone", "wood", "glass"] as BlockType[]).map((type) => (
-          <button
-            key={type}
-            onClick={(e) => {
-              e.stopPropagation();
-              setSelectedBlock(type);
+        {/* 上部エリア（全画面ボタン） */}
+        <div style={{ padding: '10px', display: 'flex', justifyContent: 'flex-end' }}>
+          <button 
+            onClick={toggleFullscreen}
+            style={{ 
+              pointerEvents: 'auto', padding: '8px 12px', backgroundColor: 'rgba(0,0,0,0.5)', 
+              color: 'white', border: '1px solid white', borderRadius: '4px', fontSize: '12px' 
             }}
-            className={`w-12 h-12 rounded-lg flex items-center justify-center transition-all ${
-              selectedBlock === type 
-                ? "border-2 border-blue-400 scale-110 bg-white/20" 
-                : "border border-white/10 hover:bg-white/10"
-            }`}
           >
-            <div 
-              className="w-8 h-8 rounded-sm shadow-inner" 
-              style={{ 
-                backgroundColor: 
-                  type === "grass" ? "#5d994d" : 
-                  type === "dirt" ? "#73533a" : 
-                  type === "stone" ? "#808080" : 
-                  type === "wood" ? "#7a5230" : "#a0d8ef" 
-              }}
-            />
+            FULLSCREEN
           </button>
-        ))}
-      </div>
+        </div>
 
-      {/* 操作ガイド */}
-      <div className="absolute top-4 left-4 text-white/70 text-sm font-mono pointer-events-none">
-        <p>BETA v0.2 - Project Gamma</p>
-        <p>Click to Lock & Fullscreen</p>
-        <p>ESC to Unlock</p>
+        {/* レティクル */}
+        <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', color: 'white', fontSize: '24px', fontWeight: 'bold' }}>+</div>
+
+        {/* 下部UIエリア */}
+        <div style={{ marginTop: 'auto', paddingBottom: '20px', display: 'flex', flexDirection: 'column', gap: '15px' }}>
+          
+          {/* ホットバー（インベントリ） - より下部に配置 */}
+          <div style={{ display: 'flex', justifyContent: 'center', gap: '10px', pointerEvents: 'auto' }}>
+            {BLOCK_TYPES.map((block, idx) => (
+              <div 
+                key={block.id}
+                onClick={() => setSelectedBlockIdx(idx)}
+                style={{ 
+                  width: '55px', height: '55px', 
+                  backgroundColor: `rgba(${block.color >> 16 & 255}, ${block.color >> 8 & 255}, ${block.color & 255}, 0.8)`,
+                  backgroundImage: `url(${block.texture})`,
+                  backgroundSize: 'cover',
+                  border: selectedBlockIdx === idx ? '4px solid #fff' : '2px solid rgba(0,0,0,0.5)',
+                  boxShadow: selectedBlockIdx === idx ? '0 0 10px white' : 'none',
+                  borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  color: 'white', fontSize: '12px', fontWeight: 'bold', textShadow: '2px 2px 2px black'
+                }}
+              >
+                {block.label}
+              </div>
+            ))}
+          </div>
+
+          {/* 操作ボタン */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', padding: '0 20px 10px' }}>
+            {/* 移動用スティック */}
+            <div 
+              style={{ width: '90px', height: '90px', borderRadius: '50%', backgroundColor: 'rgba(255,255,255,0.1)', border: '2px solid rgba(255,255,255,0.4)', pointerEvents: 'auto', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+              onTouchMove={(e) => {
+                const rect = e.currentTarget.getBoundingClientRect();
+                const t = e.touches[0];
+                state.current.moveX = (t.clientX - (rect.left + 45)) / 45;
+                state.current.moveZ = (t.clientY - (rect.top + 45)) / 45;
+              }}
+              onTouchEnd={() => { 
+                state.current.moveX = 0;
+                state.current.moveZ = 0; 
+              }}
+            >
+              <div style={{ width: '30px', height: '30px', borderRadius: '50%', backgroundColor: 'rgba(255,255,255,0.3)' }} />
+            </div>
+
+            {/* ジャンプ */}
+            <div 
+              onPointerDown={() => { if (state.current.isGrounded) state.current.velocity = 0.3; }}
+              style={{ width: '70px', height: '70px', borderRadius: '50%', backgroundColor: 'rgba(255,255,255,0.2)', border: '2px solid white', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontSize: '14px', fontWeight: 'bold', pointerEvents: 'auto', boxShadow: '0 4px 10px rgba(0,0,0,0.3)' }}
+            >
+              JUMP
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );
-}
+      }
